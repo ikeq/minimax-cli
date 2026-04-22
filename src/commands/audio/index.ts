@@ -1,6 +1,14 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { loadConfig } from '../utils/config.js';
+import { Command, Option } from 'commander';
+import { showHelpOnError } from '../../utils/command.js';
+import { loadConfig } from '../../utils/config.js';
+import { pathExists } from '../../utils/fs.js';
+import {
+  parseEnumInt,
+  parseInteger,
+  parseNumber,
+} from '../../utils/parse.js';
 import {
   AUDIO_BITRATES,
   AUDIO_CHANNELS,
@@ -13,9 +21,9 @@ import {
   EMOTIONS,
   type Emotion,
   generateAudio,
-} from '../utils/api.js';
+} from './api.js';
 
-export interface AudioCommandOptions {
+interface AudioCommandOptions {
   output: string;
   format?: string;
   model?: string;
@@ -42,7 +50,7 @@ export interface AudioCommandOptions {
  *   - `--model` and `--voice` default to the values set by `init`
  *     (`audioModel` / `voiceId`). Command-line flags override them.
  */
-export async function runAudio(
+async function runAudio(
   text: string,
   opts: AudioCommandOptions,
 ): Promise<void> {
@@ -75,10 +83,8 @@ export async function runAudio(
     );
   }
 
-  // Resolve output path and final format. Extension wins over --format.
   const { target, format } = resolveOutputTarget(opts.output, opts.format);
 
-  // Validate optional voice fields.
   const emotion = opts.emotion ? (opts.emotion as Emotion) : undefined;
   if (emotion && !EMOTIONS.includes(emotion)) {
     throw new Error(
@@ -89,7 +95,6 @@ export async function runAudio(
   const vol = parseNumber(opts.volume, '--volume', 0.000001, 10);
   const pitch = parseInteger(opts.pitch, '--pitch', -12, 12);
 
-  // Validate optional audio settings.
   const sampleRate = parseEnumInt(
     opts.sampleRate,
     '--sample-rate',
@@ -100,13 +105,10 @@ export async function runAudio(
     '--bitrate',
     AUDIO_BITRATES,
   ) as AudioBitrate | undefined;
-  const channel = parseEnumInt(
-    opts.channel,
-    '--channel',
-    AUDIO_CHANNELS,
-  ) as AudioChannel | undefined;
+  const channel = parseEnumInt(opts.channel, '--channel', AUDIO_CHANNELS) as
+    | AudioChannel
+    | undefined;
 
-  // Pre-flight existence check — never overwrite.
   if (await pathExists(target)) {
     throw new Error(
       `Target file already exists: ${target}. Remove it or choose a different --output.`,
@@ -127,7 +129,6 @@ export async function runAudio(
   });
 
   await fs.mkdir(path.dirname(target), { recursive: true });
-  // `wx` flag: write-only, fail if already exists.
   await fs.writeFile(target, result.buffer, { flag: 'wx' });
 
   console.log(`\n✅ Saved: ${target}`);
@@ -170,56 +171,86 @@ function extToFormat(ext: string): AudioFormat | undefined {
   }
 }
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
+export default function (program: Command): void {
+  const cmd = program
+    .command('audio')
+    .description('Text-to-audio generation')
+    .argument('<text>', 'Text to synthesize (Required)')
+    .addOption(
+      new Option(
+        '-o, --output <path>',
+        'Output file path; parent directory is created if missing. If the path has a .mp3/.wav/.pcm/.flac extension, that extension wins over --format (Required)',
+      ).makeOptionMandatory(true),
+    )
+    .option('--model <name>', 'Override the saved audioModel')
+    .addOption(
+      new Option('-f, --format <format>', 'Output format')
+        .choices(['mp3', 'wav', 'pcm', 'flac'])
+        .default('mp3'),
+    )
+    .option('--voice <voice-id>', 'Override the saved voiceId')
+    .addOption(
+      new Option('--emotion <emotion>', 'Voice emotion').choices([
+        'happy',
+        'sad',
+        'angry',
+        'fearful',
+        'disgusted',
+        'surprised',
+        'calm',
+        'fluent',
+        'whisper',
+      ]),
+    )
+    .option('--speed <number>', 'Speaking speed, [0.5, 2], default 1.0')
+    .option('--volume <number>', 'Volume, (0, 10], default 1.0')
+    .option('--pitch <integer>', 'Pitch, [-12, 12], default 0')
+    .addOption(
+      new Option('--sample-rate <hz>', 'Sample rate').choices([
+        '8000',
+        '16000',
+        '22050',
+        '24000',
+        '32000',
+        '44100',
+      ]),
+    )
+    .addOption(
+      new Option('--bitrate <bps>', 'Bitrate').choices([
+        '32000',
+        '64000',
+        '128000',
+        '256000',
+      ]),
+    )
+    .addOption(
+      new Option('--channel <n>', 'Audio channel count').choices(['1', '2']),
+    )
+    .option('--debug', 'Print HTTP request/response for debugging')
+    .action(async (text: string, opts) => {
+      try {
+        await runAudio(text, {
+          output: opts.output,
+          format: opts.format,
+          model: opts.model,
+          voice: opts.voice,
+          emotion: opts.emotion,
+          speed: opts.speed,
+          volume: opts.volume,
+          pitch: opts.pitch,
+          sampleRate: opts.sampleRate,
+          bitrate: opts.bitrate,
+          channel: opts.channel,
+          debug: opts.debug,
+        });
+      } catch (err) {
+        console.error(
+          'Audio generation failed:',
+          err instanceof Error ? err.message : err,
+        );
+        process.exit(1);
+      }
+    });
 
-function parseNumber(
-  raw: string | undefined,
-  label: string,
-  min: number,
-  max: number,
-): number | undefined {
-  if (raw === undefined || raw === '') return undefined;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < min || n > max) {
-    throw new Error(`${label} must be a number in [${min}, ${max}], got: ${raw}`);
-  }
-  return n;
-}
-
-function parseInteger(
-  raw: string | undefined,
-  label: string,
-  min: number,
-  max: number,
-): number | undefined {
-  if (raw === undefined || raw === '') return undefined;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < min || n > max) {
-    throw new Error(
-      `${label} must be an integer in [${min}, ${max}], got: ${raw}`,
-    );
-  }
-  return n;
-}
-
-function parseEnumInt(
-  raw: string | undefined,
-  label: string,
-  allowed: readonly number[],
-): number | undefined {
-  if (raw === undefined || raw === '') return undefined;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || !allowed.includes(n)) {
-    throw new Error(
-      `${label} must be one of ${allowed.join(', ')}, got: ${raw}`,
-    );
-  }
-  return n;
+  showHelpOnError(cmd);
 }

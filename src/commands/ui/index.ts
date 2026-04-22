@@ -1,13 +1,13 @@
-import { Command } from 'commander';
+import { execFile } from 'node:child_process';
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { openBrowser } from '../utils/open.js';
+import { fileURLToPath } from 'node:url';
+import { Command } from 'commander';
+import { openBrowser } from '../../utils/open.js';
 
 interface CommandNode {
   name: string;
@@ -71,11 +71,9 @@ function extractCommands(cmd: Command, parentPath = ''): CommandNode[] {
           }) => {
             const optKey = o.long ?? o.flags;
             const optMeta = meta?.options?.[optKey];
-            // commander stores `.choices()` values on `argChoices`.
-            // Merge them into `enum` so the UI renders a <select>.
+            // commander stores `.choices()` values on `argChoices`;
+            // merge them into `enum` so the UI renders a <select>.
             const enumValues = optMeta?.enum ?? o.argChoices;
-            // Prefer the long form; fall back to the short form. This
-            // is what the UI will prepend to the CLI argv.
             const flag = o.long ?? o.short ?? '';
             return {
               flags: o.flags,
@@ -113,7 +111,6 @@ function extractCommands(cmd: Command, parentPath = ''): CommandNode[] {
     });
 }
 
-/** Read request body. */
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -125,13 +122,12 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-/** Execute the CLI as a child process. */
+/** Spawn the CLI as a child process with stdin closed. */
 function execCommand(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-  const cliPath = resolve(__dirname, 'index.js');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const cliPath = resolve(here, 'index.js');
 
   return new Promise((resolve) => {
     const proc = execFile(
@@ -150,12 +146,10 @@ function execCommand(
         });
       },
     );
-    // Close stdin so interactive commands don't hang.
     proc.stdin?.end();
   });
 }
 
-/** Strip ANSI escape sequences. */
 function stripAnsi(str: string): string {
   return str.replace(
     /\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b\[\?[0-9;]*[a-zA-Z]/g,
@@ -437,7 +431,7 @@ const HTML_PAGE = `<!DOCTYPE html>
 </body>
 </html>`;
 
-export function registerWebCommand(program: Command): void {
+export default function (program: Command): void {
   program
     .command('ui')
     .description('Launch the Web UI')
@@ -452,7 +446,6 @@ export function registerWebCommand(program: Command): void {
         async (req: IncomingMessage, res: ServerResponse) => {
           const url = new URL(req.url ?? '/', `http://127.0.0.1`);
 
-          // CORS preflight
           if (req.method === 'OPTIONS') {
             res.writeHead(204, {
               'Access-Control-Allow-Origin': '*',
@@ -492,7 +485,9 @@ export function registerWebCommand(program: Command): void {
           console.log('Press Ctrl+C to exit\n');
           if (shouldOpen) {
             openBrowser(url).catch(() => {
-              console.log(`Could not open browser automatically. Visit ${url} manually.`);
+              console.log(
+                `Could not open browser automatically. Visit ${url} manually.`,
+              );
             });
           }
         }

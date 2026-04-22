@@ -1,7 +1,9 @@
-import { loadConfig } from '../utils/config.js';
-import { webSearch } from '../utils/api.js';
+import { Command } from 'commander';
+import { showHelpOnError } from '../../utils/command.js';
+import { loadConfig } from '../../utils/config.js';
+import { webSearch } from './api.js';
 
-export interface SearchCommandOptions {
+interface SearchCommandOptions {
   debug?: boolean;
 }
 
@@ -15,7 +17,7 @@ export interface SearchCommandOptions {
  * The server accepts a single field `q`; per the tool doc, good queries
  * are 3-5 keywords and should include a year for time-sensitive topics.
  */
-export async function runSearch(
+async function runSearch(
   query: string,
   opts: SearchCommandOptions,
 ): Promise<void> {
@@ -37,6 +39,26 @@ export async function runSearch(
     debug: opts.debug === true,
   });
 
-  // Raw JSON, as requested.
   console.log(JSON.stringify(result, null, 2));
+}
+
+export default function (program: Command): void {
+  const cmd = program
+    .command('search')
+    .description('Web search via the coding-plan endpoint')
+    .argument('<query>', 'Search query; 3-5 keywords work best (Required)')
+    .option('--debug', 'Print HTTP request/response for debugging')
+    .action(async (query: string, opts) => {
+      try {
+        await runSearch(query, { debug: opts.debug });
+      } catch (err) {
+        console.error(
+          'Search failed:',
+          err instanceof Error ? err.message : err,
+        );
+        process.exit(1);
+      }
+    });
+
+  showHelpOnError(cmd);
 }

@@ -1,8 +1,10 @@
 import { accessSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Command } from 'commander';
+import { showHelpOnError } from '../../utils/command.js';
 
-export interface SkillsCommandOptions {
+interface SkillsCommandOptions {
   path: string;
 }
 
@@ -13,7 +15,7 @@ export interface SkillsCommandOptions {
  * Refuses to run when `<path>/minimax` already exists, to avoid
  * clobbering the user's own content.
  */
-export async function runSkills(opts: SkillsCommandOptions): Promise<void> {
+async function runSkills(opts: SkillsCommandOptions): Promise<void> {
   if (!opts.path || opts.path.trim() === '') {
     throw new Error('<path> must not be empty');
   }
@@ -21,18 +23,15 @@ export async function runSkills(opts: SkillsCommandOptions): Promise<void> {
   const src = resolveBundledSkillsDir();
   const dest = path.resolve(opts.path, 'minimax');
 
-  // Existence check — never overwrite.
   try {
     await fs.access(dest);
     throw new Error(
       `Target already exists: ${dest}. Remove it first or pick a different path.`,
     );
   } catch (err) {
-    // ENOENT is what we want.
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
 
-  // Verify the source is actually there (dev mode vs. published package).
   try {
     const stat = await fs.stat(src);
     if (!stat.isDirectory()) {
@@ -54,14 +53,17 @@ export async function runSkills(opts: SkillsCommandOptions): Promise<void> {
  * Locate the bundled `skills/` directory relative to the compiled
  * `dist/index.js`. In a published package the layout is:
  *   <pkg>/dist/index.js      → ../skills
- * In dev (tsx) the compiled file lives under `src/commands/`, so we
- * walk up two levels as a fallback.
+ * In dev (tsx) the compiled file lives under `src/commands/skills/`,
+ * so we walk up three levels as a fallback.
  */
 function resolveBundledSkillsDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidate1 = path.resolve(here, '..', 'skills');
-  const candidate2 = path.resolve(here, '..', '..', 'skills');
-  return existsSync(candidate1) ? candidate1 : candidate2;
+  const candidates = [
+    path.resolve(here, '..', 'skills'),
+    path.resolve(here, '..', '..', 'skills'),
+    path.resolve(here, '..', '..', '..', 'skills'),
+  ];
+  return candidates.find(existsSync) ?? candidates[0];
 }
 
 function existsSync(p: string): boolean {
@@ -71,4 +73,27 @@ function existsSync(p: string): boolean {
   } catch {
     return false;
   }
+}
+
+export default function (program: Command): void {
+  const cmd = program
+    .command('skills')
+    .description('Copy bundled skills/ into <path>/minimax')
+    .argument(
+      '<path>',
+      'Destination directory; a "minimax" folder will be created inside it (Required)',
+    )
+    .action(async (pathArg: string) => {
+      try {
+        await runSkills({ path: pathArg });
+      } catch (err) {
+        console.error(
+          'Copy skills failed:',
+          err instanceof Error ? err.message : err,
+        );
+        process.exit(1);
+      }
+    });
+
+  showHelpOnError(cmd);
 }

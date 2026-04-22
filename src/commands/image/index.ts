@@ -1,21 +1,24 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { Command, Option } from 'commander';
 import sharp from 'sharp';
-import { loadConfig } from '../utils/config.js';
+import { showHelpOnError } from '../../utils/command.js';
+import { loadConfig } from '../../utils/config.js';
+import { pathExists } from '../../utils/fs.js';
 import {
   ASPECT_RATIOS,
   type AspectRatio,
   STYLE_TYPES,
   type StyleType,
   generateImage,
-} from '../utils/api.js';
+} from './api.js';
 
 export type ImageFormat = 'png' | 'jpg' | 'webp';
 export const IMAGE_FORMATS: ImageFormat[] = ['png', 'jpg', 'webp'];
 
 const DEFAULT_ASPECT_RATIO: AspectRatio = '16:9';
 
-export interface ImageCommandOptions {
+interface ImageCommandOptions {
   output: string;
   n: string | number;
   format: string;
@@ -42,16 +45,11 @@ export interface ImageCommandOptions {
  *     extensions (png / jpg / jpeg / webp), that extension wins over
  *     `-f`. Otherwise the chosen `-f` decides.
  *   - When n > 1, files are numbered `<base>-1.<ext>`, `<base>-2.<ext>`, …
- *   - Exposes the full documented request schema: aspect_ratio or
- *     width+height (server prefers aspect_ratio when both given), seed,
- *     prompt_optimizer, aigc_watermark, and style (only applied server-
- *     side when model is `image-01-live`).
  */
-export async function runImage(
+async function runImage(
   prompt: string,
   opts: ImageCommandOptions,
 ): Promise<void> {
-  // 1. Load and validate config
   const config = await loadConfig();
   if (!config.region || !config.token) {
     throw new Error(
@@ -59,7 +57,6 @@ export async function runImage(
     );
   }
 
-  // 2. Validate arguments
   if (!prompt || prompt.trim() === '') {
     throw new Error('prompt must not be empty');
   }
@@ -75,14 +72,12 @@ export async function runImage(
     );
   }
 
-  // Size controls: --width/--height (paired), or --aspect-ratio (default 16:9).
   const width = parseSizeDimension(opts.width, '--width');
   const height = parseSizeDimension(opts.height, '--height');
   if ((width === undefined) !== (height === undefined)) {
     throw new Error('--width and --height must be provided together');
   }
 
-  // Only fall back to the default ratio when no width/height pair is given.
   let aspectRatio: AspectRatio | undefined;
   if (opts.aspectRatio) {
     if (!ASPECT_RATIOS.includes(opts.aspectRatio as AspectRatio)) {
@@ -100,20 +95,15 @@ export async function runImage(
     throw new Error(`-n must be an integer between 1 and 9, got: ${opts.n}`);
   }
 
-  // Resolve the final format: extension in --output wins over --format.
   const { base, format } = resolveOutputTarget(opts.output, opts.format);
 
-  // Validate reference URLs, if any.
   const references = (opts.reference ?? []).map((u) => u.trim()).filter(Boolean);
   for (const url of references) {
     if (!/^https?:\/\//.test(url)) {
-      throw new Error(
-        `--reference must contain http(s) URLs, got: ${url}`,
-      );
+      throw new Error(`--reference must contain http(s) URLs, got: ${url}`);
     }
   }
 
-  // Seed.
   let seed: number | undefined;
   if (opts.seed !== undefined && opts.seed !== '') {
     const s = Number(opts.seed);
@@ -123,10 +113,7 @@ export async function runImage(
     seed = s;
   }
 
-  // Style.
-  let style:
-    | { styleType: StyleType; styleWeight?: number }
-    | undefined;
+  let style: { styleType: StyleType; styleWeight?: number } | undefined;
   if (opts.styleType) {
     if (!STYLE_TYPES.includes(opts.styleType as StyleType)) {
       throw new Error(
@@ -148,9 +135,8 @@ export async function runImage(
     throw new Error('--style-weight has no effect without --style-type');
   }
 
-  // Refuse to continue if any target file already exists — we never want
-  // to overwrite, and the check must happen BEFORE the API call so a
-  // mistake costs zero tokens.
+  // Refuse to overwrite: pre-flight check runs BEFORE the API call so
+  // a mistake costs zero tokens.
   const plannedPaths = planOutputPaths(base, format, n);
   for (const p of plannedPaths) {
     if (await pathExists(p)) {
@@ -160,7 +146,6 @@ export async function runImage(
     }
   }
 
-  // 3. Call the API
   const sizeLabel =
     width !== undefined
       ? `${width}x${height}${aspectRatio ? ` (aspect_ratio=${aspectRatio} will win server-side)` : ''}`
@@ -196,9 +181,6 @@ export async function runImage(
     );
   }
 
-  // 4. Transcode with sharp and write to disk.
-  // We re-derive paths from the actual image count the server returned,
-  // which may be smaller than `n` if some results were filtered.
   const paths = await writeImages(result.images, base, format);
 
   console.log('\n✅ Saved:');
@@ -229,7 +211,7 @@ function resolveOutputTarget(
   formatFlag: string,
 ): { base: string; format: ImageFormat } {
   const absolute = path.resolve(output);
-  const ext = path.extname(absolute).toLowerCase(); // includes leading "."
+  const ext = path.extname(absolute).toLowerCase();
 
   const fromExt = extToFormat(ext);
   if (fromExt) {
@@ -273,22 +255,9 @@ function planOutputPaths(base: string, format: ImageFormat, n: number): string[]
   return Array.from({ length: n }, (_, i) => `${base}-${i + 1}.${format}`);
 }
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Transcode base64 images with sharp and write them to disk.
- * - n == 1: writes `<base>.<format>`
- * - n  > 1: writes `<base>-1.<format>`, `<base>-2.<format>`, ...
- * - Parent directory is created if missing.
- * - Never overwrites: fails if a target path appeared since the
- *   pre-flight check.
+ * Parent directory is created if missing. Never overwrites (uses `wx`).
  */
 async function writeImages(
   base64List: string[],
@@ -313,10 +282,97 @@ async function writeImages(
           ? await pipeline.jpeg().toBuffer()
           : await pipeline.webp().toBuffer();
 
-    // `wx` flag: write-only, fail if already exists.
     await fs.writeFile(target, encoded, { flag: 'wx' });
     paths.push(target);
   }
 
   return paths;
+}
+
+export default function (program: Command): void {
+  const cmd = program
+    .command('image')
+    .description('Text-to-image generation')
+    .argument('<prompt>', 'Text description of the image (Required)')
+    .addOption(
+      new Option(
+        '-o, --output <path>',
+        'Output file path; parent directory is created if missing. If the path has a .png/.jpg/.jpeg/.webp extension, that extension wins over --format. With -n>1 files are numbered -1, -2, ... (Required)',
+      ).makeOptionMandatory(true),
+    )
+    .addOption(
+      new Option(
+        '-r, --aspect-ratio <ratio>',
+        'Aspect ratio; ignored by the server when --width/--height are set',
+      )
+        .choices(['1:1', '16:9', '4:3', '3:2', '2:3', '3:4', '9:16', '21:9'])
+        .default('16:9'),
+    )
+    .option('--model <name>', 'Override the saved imageModel')
+    .option(
+      '--width <pixels>',
+      'Image width in pixels, [512, 2048], multiple of 8 (requires --height)',
+    )
+    .option(
+      '--height <pixels>',
+      'Image height in pixels, [512, 2048], multiple of 8 (requires --width)',
+    )
+    .addOption(
+      new Option('-n, --number <count>', 'Number of images to generate').default(
+        '1',
+      ),
+    )
+    .addOption(
+      new Option('-f, --format <format>', 'Output format')
+        .choices(['png', 'jpg', 'webp'])
+        .default('webp'),
+    )
+    .option(
+      '--reference <urls>',
+      'Comma-separated http(s) URLs used as subject references, e.g. img1,img2',
+      (raw: string) =>
+        raw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+    )
+    .option('--seed <integer>', 'Random seed for reproducible output')
+    .option('--prompt-optimizer', 'Enable server-side prompt auto-optimization')
+    .option('--watermark', 'Enable the AIGC watermark on generated images')
+    .addOption(
+      new Option(
+        '--style-type <type>',
+        'Style preset; only applied when model is image-01-live',
+      ).choices(['漫画', '元气', '中世纪', '水彩']),
+    )
+    .option('--style-weight <number>', 'Style weight in (0, 1], default 0.8')
+    .option('--debug', 'Print HTTP request/response for debugging')
+    .action(async (prompt: string, opts) => {
+      try {
+        await runImage(prompt, {
+          output: opts.output,
+          aspectRatio: opts.aspectRatio,
+          width: opts.width,
+          height: opts.height,
+          n: opts.number,
+          format: opts.format,
+          model: opts.model,
+          reference: opts.reference,
+          seed: opts.seed,
+          promptOptimizer: opts.promptOptimizer,
+          watermark: opts.watermark,
+          styleType: opts.styleType,
+          styleWeight: opts.styleWeight,
+          debug: opts.debug,
+        });
+      } catch (err) {
+        console.error(
+          'Image generation failed:',
+          err instanceof Error ? err.message : err,
+        );
+        process.exit(1);
+      }
+    });
+
+  showHelpOnError(cmd);
 }
