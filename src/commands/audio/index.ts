@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Command, Option } from 'commander';
 import { showHelpOnError } from '../../utils/command.js';
 import { loadConfig } from '../../utils/config.js';
-import { pathExists } from '../../utils/fs.js';
+import { assertAbsolutePath, pathExists } from '../../utils/fs.js';
 import {
   parseEnumInt,
   parseInteger,
@@ -68,6 +68,7 @@ async function runAudio(
   if (!opts.output || opts.output.trim() === '') {
     throw new Error('--output must not be empty');
   }
+  assertAbsolutePath(opts.output, '--output');
 
   const model = (opts.model ?? config.audioModel ?? '').trim();
   if (!model) {
@@ -179,7 +180,7 @@ export default function (program: Command): void {
     .addOption(
       new Option(
         '-o, --output <path>',
-        'Output file path; parent directory is created if missing. If the path has a .mp3/.wav/.pcm/.flac extension, that extension wins over --format (Required)',
+        'Absolute output file path; parent directory is created if missing. If the path has a .mp3/.wav/.pcm/.flac extension, that extension wins over --format (Required)',
       ).makeOptionMandatory(true),
     )
     .option('--model <name>', 'Override the saved audioModel')

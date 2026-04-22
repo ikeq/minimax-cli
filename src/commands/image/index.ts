@@ -4,7 +4,7 @@ import { Command, Option } from 'commander';
 import sharp from 'sharp';
 import { showHelpOnError } from '../../utils/command.js';
 import { loadConfig } from '../../utils/config.js';
-import { pathExists } from '../../utils/fs.js';
+import { assertAbsolutePath, pathExists } from '../../utils/fs.js';
 import {
   ASPECT_RATIOS,
   type AspectRatio,
@@ -64,6 +64,7 @@ async function runImage(
   if (!opts.output || opts.output.trim() === '') {
     throw new Error('--output must not be empty');
   }
+  assertAbsolutePath(opts.output, '--output');
 
   const model = (opts.model ?? config.imageModel ?? '').trim();
   if (!model) {
@@ -297,7 +298,7 @@ export default function (program: Command): void {
     .addOption(
       new Option(
         '-o, --output <path>',
-        'Output file path; parent directory is created if missing. If the path has a .png/.jpg/.jpeg/.webp extension, that extension wins over --format. With -n>1 files are numbered -1, -2, ... (Required)',
+        'Absolute output file path; parent directory is created if missing. If the path has a .png/.jpg/.jpeg/.webp extension, that extension wins over --format. With -n>1 files are numbered -1, -2, ... (Required)',
       ).makeOptionMandatory(true),
     )
     .addOption(

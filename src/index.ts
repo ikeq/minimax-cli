@@ -7,13 +7,14 @@ import registerSearch from './commands/search/index.js';
 import registerSkills from './commands/skills/index.js';
 import registerUi from './commands/ui/index.js';
 import { showHelpOnError } from './utils/command.js';
+import { VERSION } from './utils/version.js';
 
 const program = new Command();
 
 program
   .name('minimax')
   .description('MiniMax command line tool')
-  .version('0.1.0');
+  .version(VERSION);
 
 showHelpOnError(program);
 
