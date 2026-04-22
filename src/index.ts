@@ -2,6 +2,7 @@
 import { Command, Option } from 'commander';
 import { runInit } from './commands/init.js';
 import { runImage } from './commands/image.js';
+import { runAudio } from './commands/audio.js';
 import { runSearch } from './commands/search.js';
 import { runSkills } from './commands/skills.js';
 import { registerWebCommand } from './commands/ui.js';
@@ -64,11 +65,13 @@ const imageCmd = program
   .addOption(
     new Option(
       '-r, --aspect-ratio <ratio>',
-      'Aspect ratio (Required)',
+      'Aspect ratio; ignored by the server when --width/--height are set',
     )
       .choices(['1:1', '16:9', '4:3', '3:2', '2:3', '3:4', '9:16', '21:9'])
-      .makeOptionMandatory(true),
+      .default('16:9'),
   )
+  .option('--width <pixels>', 'Image width in pixels, [512, 2048], multiple of 8 (requires --height)')
+  .option('--height <pixels>', 'Image height in pixels, [512, 2048], multiple of 8 (requires --width)')
   .addOption(
     new Option('-n, --number <count>', 'Number of images to generate').default(
       '1',
@@ -79,6 +82,7 @@ const imageCmd = program
       .choices(['png', 'jpg', 'webp'])
       .default('webp'),
   )
+  .option('--model <name>', 'Override the saved imageModel')
   .option(
     '--reference <urls>',
     'Comma-separated http(s) URLs used as subject references, e.g. img1,img2',
@@ -88,15 +92,33 @@ const imageCmd = program
         .map((s) => s.trim())
         .filter(Boolean),
   )
+  .option('--seed <integer>', 'Random seed for reproducible output')
+  .option('--prompt-optimizer', 'Enable server-side prompt auto-optimization')
+  .option('--watermark', 'Enable the AIGC watermark on generated images')
+  .addOption(
+    new Option(
+      '--style-type <type>',
+      'Style preset; only applied when model is image-01-live',
+    ).choices(['漫画', '元气', '中世纪', '水彩']),
+  )
+  .option('--style-weight <number>', 'Style weight in (0, 1], default 0.8')
   .option('--debug', 'Print HTTP request/response for debugging')
   .action(async (prompt: string, opts) => {
     try {
       await runImage(prompt, {
         output: opts.output,
         aspectRatio: opts.aspectRatio,
+        width: opts.width,
+        height: opts.height,
         n: opts.number,
         format: opts.format,
+        model: opts.model,
         reference: opts.reference,
+        seed: opts.seed,
+        promptOptimizer: opts.promptOptimizer,
+        watermark: opts.watermark,
+        styleType: opts.styleType,
+        styleWeight: opts.styleWeight,
         debug: opts.debug,
       });
     } catch (err) {
@@ -133,6 +155,88 @@ const searchCmd = program
   });
 
 showHelpOnError(searchCmd);
+
+const audioCmd = program
+  .command('audio')
+  .description('Text-to-audio generation')
+  .argument('<text>', 'Text to synthesize (Required)')
+  .addOption(
+    new Option(
+      '-o, --output <path>',
+      'Output file path; parent directory is created if missing. If the path has a .mp3/.wav/.pcm/.flac extension, that extension wins over --format (Required)',
+    ).makeOptionMandatory(true),
+  )
+  .addOption(
+    new Option('-f, --format <format>', 'Output format')
+      .choices(['mp3', 'wav', 'pcm', 'flac'])
+      .default('mp3'),
+  )
+  .option('--model <name>', 'Override the saved audioModel')
+  .option('--voice <voice-id>', 'Override the saved voiceId')
+  .addOption(
+    new Option('--emotion <emotion>', 'Voice emotion').choices([
+      'happy',
+      'sad',
+      'angry',
+      'fearful',
+      'disgusted',
+      'surprised',
+      'calm',
+      'fluent',
+      'whisper',
+    ]),
+  )
+  .option('--speed <number>', 'Speaking speed, [0.5, 2], default 1.0')
+  .option('--volume <number>', 'Volume, (0, 10], default 1.0')
+  .option('--pitch <integer>', 'Pitch, [-12, 12], default 0')
+  .addOption(
+    new Option('--sample-rate <hz>', 'Sample rate').choices([
+      '8000',
+      '16000',
+      '22050',
+      '24000',
+      '32000',
+      '44100',
+    ]),
+  )
+  .addOption(
+    new Option('--bitrate <bps>', 'Bitrate').choices([
+      '32000',
+      '64000',
+      '128000',
+      '256000',
+    ]),
+  )
+  .addOption(
+    new Option('--channel <n>', 'Audio channel count').choices(['1', '2']),
+  )
+  .option('--debug', 'Print HTTP request/response for debugging')
+  .action(async (text: string, opts) => {
+    try {
+      await runAudio(text, {
+        output: opts.output,
+        format: opts.format,
+        model: opts.model,
+        voice: opts.voice,
+        emotion: opts.emotion,
+        speed: opts.speed,
+        volume: opts.volume,
+        pitch: opts.pitch,
+        sampleRate: opts.sampleRate,
+        bitrate: opts.bitrate,
+        channel: opts.channel,
+        debug: opts.debug,
+      });
+    } catch (err) {
+      console.error(
+        'Audio generation failed:',
+        err instanceof Error ? err.message : err,
+      );
+      process.exit(1);
+    }
+  });
+
+showHelpOnError(audioCmd);
 
 const skillsCmd = program
   .command('skills')

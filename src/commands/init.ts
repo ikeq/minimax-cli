@@ -18,9 +18,9 @@ function maskToken(token: string): string {
 
 /**
  * Implementation of `minimax init`.
- * Always runs interactively, asking for region / token / imageModel
- * in order. If a config already exists, previous values are used as
- * defaults so pressing Enter keeps them.
+ * Always runs interactively, asking for region / token / imageModel /
+ * audioModel / voiceId in order. If a config already exists, previous
+ * values are used as defaults so pressing Enter keeps them.
  */
 export async function runInit(): Promise<void> {
   const existing = await loadConfig();
@@ -65,10 +65,26 @@ export async function runInit(): Promise<void> {
     validate: (v) => v.trim() !== '' || 'Must not be empty',
   });
 
+  // 4. audioModel — free-form text, used by `minimax audio`
+  const audioModel = await input({
+    message: 'Audio model:',
+    default: existing.audioModel,
+    validate: (v) => v.trim() !== '' || 'Must not be empty',
+  });
+
+  // 5. voiceId — free-form text, used by `minimax audio`
+  const voiceId = await input({
+    message: 'Voice ID:',
+    default: existing.voiceId,
+    validate: (v) => v.trim() !== '' || 'Must not be empty',
+  });
+
   const next: CliConfig = {
     region,
     token,
     imageModel: imageModel.trim(),
+    audioModel: audioModel.trim(),
+    voiceId: voiceId.trim(),
   };
 
   await saveConfig(next);

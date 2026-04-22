@@ -5,18 +5,30 @@ import { loadConfig } from '../utils/config.js';
 import {
   ASPECT_RATIOS,
   type AspectRatio,
+  STYLE_TYPES,
+  type StyleType,
   generateImage,
 } from '../utils/api.js';
 
 export type ImageFormat = 'png' | 'jpg' | 'webp';
 export const IMAGE_FORMATS: ImageFormat[] = ['png', 'jpg', 'webp'];
 
+const DEFAULT_ASPECT_RATIO: AspectRatio = '16:9';
+
 export interface ImageCommandOptions {
   output: string;
-  aspectRatio: string;
   n: string | number;
   format: string;
+  model?: string;
+  aspectRatio?: string;
+  width?: string;
+  height?: string;
   reference?: string[];
+  seed?: string;
+  promptOptimizer?: boolean;
+  watermark?: boolean;
+  styleType?: string;
+  styleWeight?: string;
   debug?: boolean;
 }
 
@@ -30,6 +42,10 @@ export interface ImageCommandOptions {
  *     extensions (png / jpg / jpeg / webp), that extension wins over
  *     `-f`. Otherwise the chosen `-f` decides.
  *   - When n > 1, files are numbered `<base>-1.<ext>`, `<base>-2.<ext>`, …
+ *   - Exposes the full documented request schema: aspect_ratio or
+ *     width+height (server prefers aspect_ratio when both given), seed,
+ *     prompt_optimizer, aigc_watermark, and style (only applied server-
+ *     side when model is `image-01-live`).
  */
 export async function runImage(
   prompt: string,
@@ -37,9 +53,9 @@ export async function runImage(
 ): Promise<void> {
   // 1. Load and validate config
   const config = await loadConfig();
-  if (!config.region || !config.token || !config.imageModel) {
+  if (!config.region || !config.token) {
     throw new Error(
-      'Config is incomplete. Run `minimax init` first to set region / token / imageModel.',
+      'Config is incomplete. Run `minimax init` first to set region / token.',
     );
   }
 
@@ -48,20 +64,40 @@ export async function runImage(
     throw new Error('prompt must not be empty');
   }
 
-  const aspectRatio = opts.aspectRatio as AspectRatio;
-  if (!ASPECT_RATIOS.includes(aspectRatio)) {
+  if (!opts.output || opts.output.trim() === '') {
+    throw new Error('--output must not be empty');
+  }
+
+  const model = (opts.model ?? config.imageModel ?? '').trim();
+  if (!model) {
     throw new Error(
-      `Invalid --aspect-ratio "${opts.aspectRatio}". Allowed: ${ASPECT_RATIOS.join(', ')}`,
+      'No image model set. Pass --model, or run `minimax init` to save an imageModel.',
     );
+  }
+
+  // Size controls: --width/--height (paired), or --aspect-ratio (default 16:9).
+  const width = parseSizeDimension(opts.width, '--width');
+  const height = parseSizeDimension(opts.height, '--height');
+  if ((width === undefined) !== (height === undefined)) {
+    throw new Error('--width and --height must be provided together');
+  }
+
+  // Only fall back to the default ratio when no width/height pair is given.
+  let aspectRatio: AspectRatio | undefined;
+  if (opts.aspectRatio) {
+    if (!ASPECT_RATIOS.includes(opts.aspectRatio as AspectRatio)) {
+      throw new Error(
+        `Invalid --aspect-ratio "${opts.aspectRatio}". Allowed: ${ASPECT_RATIOS.join(', ')}`,
+      );
+    }
+    aspectRatio = opts.aspectRatio as AspectRatio;
+  } else if (width === undefined) {
+    aspectRatio = DEFAULT_ASPECT_RATIO;
   }
 
   const n = Number(opts.n);
   if (!Number.isInteger(n) || n < 1 || n > 9) {
     throw new Error(`-n must be an integer between 1 and 9, got: ${opts.n}`);
-  }
-
-  if (!opts.output || opts.output.trim() === '') {
-    throw new Error('--output must not be empty');
   }
 
   // Resolve the final format: extension in --output wins over --format.
@@ -77,6 +113,41 @@ export async function runImage(
     }
   }
 
+  // Seed.
+  let seed: number | undefined;
+  if (opts.seed !== undefined && opts.seed !== '') {
+    const s = Number(opts.seed);
+    if (!Number.isInteger(s)) {
+      throw new Error(`--seed must be an integer, got: ${opts.seed}`);
+    }
+    seed = s;
+  }
+
+  // Style.
+  let style:
+    | { styleType: StyleType; styleWeight?: number }
+    | undefined;
+  if (opts.styleType) {
+    if (!STYLE_TYPES.includes(opts.styleType as StyleType)) {
+      throw new Error(
+        `Invalid --style-type "${opts.styleType}". Allowed: ${STYLE_TYPES.join(', ')}`,
+      );
+    }
+    let styleWeight: number | undefined;
+    if (opts.styleWeight !== undefined && opts.styleWeight !== '') {
+      const w = Number(opts.styleWeight);
+      if (!Number.isFinite(w) || w <= 0 || w > 1) {
+        throw new Error(
+          `--style-weight must be a number in (0, 1], got: ${opts.styleWeight}`,
+        );
+      }
+      styleWeight = w;
+    }
+    style = { styleType: opts.styleType as StyleType, styleWeight };
+  } else if (opts.styleWeight !== undefined) {
+    throw new Error('--style-weight has no effect without --style-type');
+  }
+
   // Refuse to continue if any target file already exists — we never want
   // to overwrite, and the check must happen BEFORE the API call so a
   // mistake costs zero tokens.
@@ -90,19 +161,31 @@ export async function runImage(
   }
 
   // 3. Call the API
-  console.log(`Generating ${n} image(s) at ${aspectRatio} as ${format}...`);
+  const sizeLabel =
+    width !== undefined
+      ? `${width}x${height}${aspectRatio ? ` (aspect_ratio=${aspectRatio} will win server-side)` : ''}`
+      : (aspectRatio ?? DEFAULT_ASPECT_RATIO);
+  console.log(
+    `Generating ${n} image(s) at ${sizeLabel} as ${format} using ${model}...`,
+  );
   const result = await generateImage({
     region: config.region,
     token: config.token,
     params: {
-      model: config.imageModel,
+      model,
       prompt,
       aspectRatio,
+      width,
+      height,
       n,
       subjectReference:
         references.length > 0
           ? references.map((url) => ({ type: 'character', image_file: url }))
           : undefined,
+      seed,
+      promptOptimizer: opts.promptOptimizer === true ? true : undefined,
+      aigcWatermark: opts.watermark === true ? true : undefined,
+      style,
     },
     debug: opts.debug === true,
   });
@@ -120,6 +203,21 @@ export async function runImage(
 
   console.log('\n✅ Saved:');
   for (const p of paths) console.log(`   ${p}`);
+}
+
+/** Parse a width/height value. Must be an integer in [512, 2048] and a multiple of 8. */
+function parseSizeDimension(
+  raw: string | undefined,
+  label: string,
+): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 512 || n > 2048 || n % 8 !== 0) {
+    throw new Error(
+      `${label} must be an integer in [512, 2048] and a multiple of 8, got: ${raw}`,
+    );
+  }
+  return n;
 }
 
 /**

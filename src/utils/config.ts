@@ -12,6 +12,8 @@ export interface CliConfig {
   region?: Region;
   token?: string;
   imageModel?: string;
+  audioModel?: string;
+  voiceId?: string;
 }
 
 const CONFIG_DIR = path.join(os.homedir(), '.minimax-cli');

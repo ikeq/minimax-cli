@@ -35,12 +35,30 @@ export interface SubjectReference {
   image_file: string;
 }
 
+export type StyleType = '漫画' | '元气' | '中世纪' | '水彩';
+export const STYLE_TYPES: StyleType[] = ['漫画', '元气', '中世纪', '水彩'];
+
+export interface StyleSetting {
+  /** Only applied when `model` is `image-01-live`; ignored otherwise. */
+  styleType: StyleType;
+  /** Range (0, 1], default 0.8. */
+  styleWeight?: number;
+}
+
 export interface ImageGenerationParams {
   model: string;
   prompt: string;
-  aspectRatio: AspectRatio;
+  /** One of ASPECT_RATIOS. Ignored by the server when width+height are set. */
+  aspectRatio?: AspectRatio;
+  /** If both width and height are set, they take effect; aspect_ratio wins when both groups are provided. */
+  width?: number;
+  height?: number;
   n: number;
   subjectReference?: SubjectReference[];
+  seed?: number;
+  promptOptimizer?: boolean;
+  aigcWatermark?: boolean;
+  style?: StyleSetting;
 }
 
 export interface ImageGenerationResult {
@@ -88,12 +106,36 @@ export async function generateImage(opts: {
   const body: Record<string, unknown> = {
     model: params.model,
     prompt: params.prompt,
-    aspect_ratio: params.aspectRatio,
     n: params.n,
     response_format: 'base64' as const,
   };
+  if (params.aspectRatio) {
+    body.aspect_ratio = params.aspectRatio;
+  }
+  if (params.width !== undefined && params.height !== undefined) {
+    body.width = params.width;
+    body.height = params.height;
+  }
   if (params.subjectReference && params.subjectReference.length > 0) {
     body.subject_reference = params.subjectReference;
+  }
+  if (params.seed !== undefined) {
+    body.seed = params.seed;
+  }
+  if (params.promptOptimizer !== undefined) {
+    body.prompt_optimizer = params.promptOptimizer;
+  }
+  if (params.aigcWatermark !== undefined) {
+    body.aigc_watermark = params.aigcWatermark;
+  }
+  if (params.style) {
+    const style: Record<string, unknown> = {
+      style_type: params.style.styleType,
+    };
+    if (params.style.styleWeight !== undefined) {
+      style.style_weight = params.style.styleWeight;
+    }
+    body.style = style;
   }
 
   const headers: Record<string, string> = {
@@ -245,4 +287,184 @@ export async function webSearch(opts: {
   }
 
   return await res.json();
+}
+
+export type AudioFormat = 'mp3' | 'pcm' | 'flac' | 'wav';
+export const AUDIO_FORMATS: AudioFormat[] = ['mp3', 'pcm', 'flac', 'wav'];
+
+export type Emotion =
+  | 'happy'
+  | 'sad'
+  | 'angry'
+  | 'fearful'
+  | 'disgusted'
+  | 'surprised'
+  | 'calm'
+  | 'fluent'
+  | 'whisper';
+export const EMOTIONS: Emotion[] = [
+  'happy',
+  'sad',
+  'angry',
+  'fearful',
+  'disgusted',
+  'surprised',
+  'calm',
+  'fluent',
+  'whisper',
+];
+
+export const AUDIO_SAMPLE_RATES = [
+  8000, 16000, 22050, 24000, 32000, 44100,
+] as const;
+export type AudioSampleRate = (typeof AUDIO_SAMPLE_RATES)[number];
+
+export const AUDIO_BITRATES = [32000, 64000, 128000, 256000] as const;
+export type AudioBitrate = (typeof AUDIO_BITRATES)[number];
+
+export const AUDIO_CHANNELS = [1, 2] as const;
+export type AudioChannel = (typeof AUDIO_CHANNELS)[number];
+
+export interface VoiceSetting {
+  voiceId: string;
+  speed?: number;
+  vol?: number;
+  pitch?: number;
+  emotion?: Emotion;
+}
+
+export interface AudioSetting {
+  format?: AudioFormat;
+  sampleRate?: AudioSampleRate;
+  bitrate?: AudioBitrate;
+  channel?: AudioChannel;
+}
+
+export interface AudioGenerationParams {
+  model: string;
+  text: string;
+  voice: VoiceSetting;
+  audio?: AudioSetting;
+}
+
+export interface AudioGenerationResult {
+  /** Decoded audio bytes ready to write to disk. */
+  buffer: Buffer;
+  format: AudioFormat;
+  extra?: Record<string, unknown>;
+  traceId?: string;
+}
+
+interface RawAudioResponse {
+  data?: {
+    audio?: string;
+    status?: number;
+  };
+  extra_info?: Record<string, unknown> & { audio_format?: string };
+  trace_id?: string;
+  base_resp?: {
+    status_code: number;
+    status_msg: string;
+  };
+}
+
+/**
+ * Call the MiniMax text-to-audio HTTP endpoint (POST /v1/t2a_v2).
+ * Returns the decoded audio bytes plus metadata. `output_format` is
+ * pinned to `hex` so the caller gets a Buffer directly.
+ */
+export async function generateAudio(opts: {
+  region: Region;
+  token: string;
+  params: AudioGenerationParams;
+  debug?: boolean;
+}): Promise<AudioGenerationResult> {
+  const { region, token, params, debug } = opts;
+  const url = `${getBaseUrl(region)}/v1/t2a_v2`;
+
+  const voiceSetting: Record<string, unknown> = {
+    voice_id: params.voice.voiceId,
+  };
+  if (params.voice.speed !== undefined) voiceSetting.speed = params.voice.speed;
+  if (params.voice.vol !== undefined) voiceSetting.vol = params.voice.vol;
+  if (params.voice.pitch !== undefined) voiceSetting.pitch = params.voice.pitch;
+  if (params.voice.emotion !== undefined)
+    voiceSetting.emotion = params.voice.emotion;
+
+  const audioSetting: Record<string, unknown> = {};
+  if (params.audio?.format) audioSetting.format = params.audio.format;
+  if (params.audio?.sampleRate) audioSetting.sample_rate = params.audio.sampleRate;
+  if (params.audio?.bitrate) audioSetting.bitrate = params.audio.bitrate;
+  if (params.audio?.channel) audioSetting.channel = params.audio.channel;
+
+  const body: Record<string, unknown> = {
+    model: params.model,
+    text: params.text,
+    stream: false,
+    output_format: 'hex',
+    voice_setting: voiceSetting,
+  };
+  if (Object.keys(audioSetting).length > 0) {
+    body.audio_setting = audioSetting;
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+  const serializedBody = JSON.stringify(body);
+
+  if (debug) {
+    logRequest(url, 'POST', headers, serializedBody);
+  }
+
+  const start = Date.now();
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: serializedBody,
+  });
+
+  if (debug) {
+    const cloned = res.clone();
+    const text = await cloned.text().catch(() => '');
+    logResponse(res.status, res.statusText, Date.now() - start, text);
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(
+      `HTTP ${res.status} ${res.statusText}${text ? `: ${text}` : ''}`,
+    );
+  }
+
+  const json = (await res.json()) as RawAudioResponse;
+
+  if (json.base_resp && json.base_resp.status_code !== 0) {
+    throw new Error(
+      `API error ${json.base_resp.status_code}: ${json.base_resp.status_msg}`,
+    );
+  }
+
+  const hex = json.data?.audio;
+  if (!hex) {
+    throw new Error('API returned no audio (data.audio is empty)');
+  }
+
+  const buffer = Buffer.from(hex, 'hex');
+  if (buffer.length === 0) {
+    throw new Error('Decoded audio buffer is empty');
+  }
+
+  const reportedFormat =
+    (json.extra_info?.audio_format as AudioFormat | undefined) ??
+    params.audio?.format ??
+    'mp3';
+
+  return {
+    buffer,
+    format: reportedFormat,
+    extra: json.extra_info,
+    traceId: json.trace_id,
+  };
 }

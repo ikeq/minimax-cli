@@ -1,7 +1,7 @@
 ---
 name: minimax
 version: 0.1.0
-description: "MiniMax CLI: text-to-image generation and web search via the coding-plan endpoint. Use this skill when the user wants to generate images with MiniMax or search the web through MiniMax."
+description: "MiniMax CLI: text-to-image, text-to-audio, and web search via the coding-plan endpoint. Use this skill when the user wants to generate images or speech with MiniMax or search the web through MiniMax."
 metadata:
   requires:
     bins: ["minimax"]
@@ -10,7 +10,7 @@ metadata:
 
 # minimax
 
-Command-line tool for MiniMax. Generate images and run web search from your terminal.
+Command-line tool for MiniMax. Generate images, generate speech, and run web search from your terminal.
 
 ## Install
 
@@ -34,7 +34,9 @@ Stored at `~/.minimax-cli/config.json`:
 {
   "region": "china",        // or "global"
   "token": "<your token>",
-  "imageModel": "image-01"
+  "imageModel": "image-01",
+  "audioModel": "speech-2.8-hd",
+  "voiceId": "male-qn-qingse"
 }
 ```
 
@@ -43,6 +45,8 @@ Stored at `~/.minimax-cli/config.json`:
 | `region`     | every subcommand    | Determines the base URL (see below)       |
 | `token`      | every subcommand    | Bearer token; never printed in plaintext  |
 | `imageModel` | `minimax image`     | Default image model (e.g. `image-01`)     |
+| `audioModel` | `minimax audio`     | Default audio model (e.g. `speech-2.8-hd`) |
+| `voiceId`    | `minimax audio`     | Default voice ID (e.g. `male-qn-qingse`)  |
 
 | Region   | Base URL                   |
 | -------- | -------------------------- |
@@ -68,6 +72,7 @@ Read the matching reference based on user intent:
 | Command  | When to use                                             | Reference |
 | -------- | ------------------------------------------------------- | --------- |
 | `image`  | Text-to-image generation, reference images, batch output | [`references/image.md`](references/image.md) |
+| `audio`  | Text-to-audio generation, voice/emotion/format tuning   | [`references/audio.md`](references/audio.md) |
 | `search` | Web search via the coding-plan endpoint                 | [`references/search.md`](references/search.md) |
 
 ## Agent rules
